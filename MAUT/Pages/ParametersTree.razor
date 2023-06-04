@@ -1,0 +1,278 @@
+﻿@page "/"
+@using MAUT.Data;
+@using Syncfusion.Blazor.Navigations
+@using System.Xml.Serialization
+@inject NavigationManager navigationManager
+@inject DataModel dataModel
+
+<div class="col-md-12">
+    <div class="input-group mb-3 d-inline-flex">
+        <InputFile OnChange="HandleImportFile" accept=".xml" id="fileInput" style="display: none" />
+        <label for="fileInput" class="btn btn-secondary">Import</label>
+        <div class="input-group-text">or</div>
+        <label for="exportLink" class="btn btn-secondary" onclick="document.getElementById('exportLink').click()">Export</label>
+        <div class="input-group-text">whole model</div>
+        <a id="exportLink" href="@($"data:text/xml;charset=utf-8,{Uri.EscapeDataString(ExportParametersModel())}")" download="parameters.xml" style="display: none">Export</a>
+    </div>
+</div>
+
+<SfTreeView TValue="ParameterModel" AllowEditing="true">
+    <TreeViewFieldsSettings TValue="ParameterModel" Id="Id" DataSource="@dataModel.Parameters" Text="Name" ParentID="ParentId" 
+    HasChildren="HasSubParameters" Expanded="Expanded" Selected="IsSelected" Child="SubParameters">
+        <TreeViewTemplates TValue="ParameterModel">
+                <NodeTemplate>
+                <div class="d-flex align-items-center">
+                    <span style="color: @context.Color">@context.Name</span>
+                    @if (context.Id != "0")
+                    {
+                        <div class="input-group" style="margin-left: 5px;">
+                            <input type="number" min="0" max="1" step="0.1" class="form-control form-control-sm weight-input" style="border-color: @context.Color;" @bind="@context.Weight" />
+                            <span class="input-group-text weight-unit" style="border-color: @context.Color; color: white; background-color: @context.Color;">W</span>
+                        </div>
+
+                            @if (!context.HasSubParameters)
+                            {
+                                <div class="input-group" style="margin-left: 10px;">
+                                    <select class="form-select form-select-sm form-select-truncate" aria-label=".form-select-sm example" style="border-color: @context.Color" @bind="@context.UtilityFunction">
+                                        <option value="linear" selected>Linear</option>
+                                        <option value="exponent">Exponent</option>
+                                        <option value="logarithmic">Logarithmic</option>
+                                    </select>
+                                    <span class="input-group-text utility-unit" style="border-color: @context.Color; color: white; background-color: @context.Color;">U</span>
+                                </div>
+                            }
+
+                        <button class="e-control e-btn e-lib e-outline e-danger btn-sm" style="border-radius: 20px" @onclick="@(() => RemoveNode(context.Id))">
+                            <span class="bi bi-dash-lg"></span>
+                        </button>
+                    }
+                    <button class="e-control e-btn e-lib e-outline e-primary btn-sm" style="border-radius: 20px" @onclick="@(() => AddNode(context.Id))">
+                        <span class="bi bi-plus-lg"></span>
+                    </button>
+                </div>
+                </NodeTemplate>
+        </TreeViewTemplates>
+    </TreeViewFieldsSettings>
+</SfTreeView>
+@if (!AllWeightsAreValid())
+{
+    <p class="text-danger my-3 mx-auto" style="width: 80%; font-size: 1.2rem; font-weight: bold; text-align: center;">The sum of weights on each level must be 1.</p>
+}
+
+<button class="btn btn-primary" disabled="@(!AllWeightsAreValid())" @onclick="@(()=>navigationManager.NavigateTo("/alternatives"))">Next</button>
+
+@code {
+
+    // Colors
+    List<string> colors = new List<string> { "#0000FF", "#90EE90", "#E0BBE4", "#D2B48C", "#FFFFE0", "#FFA07A" };
+    Dictionary<int, string> levelColors = new Dictionary<int, string>();
+    int colorIndex = 0;
+
+
+
+    private void UpdateEndNodeParameters()
+    {
+        dataModel.EndNodeParameters = dataModel.Parameters.Where(node => !node.HasSubParameters).ToList();
+    }
+
+    private void AddNode(string parentId)
+    {
+        var parent = dataModel.Parameters.FirstOrDefault(p => p.Id == parentId);
+        if (parent == null)
+        {
+            return;
+        }
+
+        var parentLevel = parent.Level;
+        string parentColor;
+        if (!levelColors.TryGetValue(parentLevel, out parentColor))
+        {
+            parentColor = colors[levelColors.Count % colors.Count];
+            levelColors[parentLevel] = parentColor;
+        }
+
+        // Get all parameters with the same level
+        var siblings = dataModel.Parameters.Where(p => p.Level == parent.Level + 1 && p.ParentId != null).ToList();
+
+        // Calculate the sum of weights of all siblings
+        var siblingWeightsSum = siblings.Sum(p => p.Weight);
+
+        // If the sum of weights is less than 1, add a new parameter node
+        if (siblingWeightsSum < 1)
+        {
+            var newNode = new ParameterModel
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    ParentId = parentId,
+                    Level = parentLevel + 1,
+                    Name = "New Parameter",
+                    Color = parentColor,
+                    HasSubParameters = false,
+                    Expanded = true,
+                    Weight = Math.Round(1 - siblingWeightsSum, 2)
+                };
+
+            dataModel.Parameters.Add(newNode);
+        }
+        // If the sum of weights > 1, normalize the sum of weights to 1
+        else if (siblingWeightsSum > 1)
+        {
+            foreach (var sibling in siblings)
+            {
+                sibling.Weight /= siblingWeightsSum;
+                sibling.Weight = Math.Round(sibling.Weight, 2);
+            }
+        }
+
+        parent.HasSubParameters = true;
+
+        UpdateEndNodeParameters();
+    }
+
+
+    private void RemoveNode(string id)
+    {
+        var nodeToRemove = dataModel.Parameters.FirstOrDefault(p => p.Id == id);
+
+        if (nodeToRemove != null)
+        {
+            var parentId = nodeToRemove.ParentId;
+            dataModel.Parameters.Remove(nodeToRemove);
+
+            // Check if the parent parameter still has any children
+            var hasChildren = dataModel.Parameters.Any(p => p.ParentId == parentId);
+
+            // If the parent parameter has no children, update the 'hasSubParameters' property
+            var parentParameter = dataModel.Parameters.FirstOrDefault(p => p.Id == parentId);
+            if (parentParameter != null)
+            {
+                parentParameter.HasSubParameters = hasChildren;
+            }
+        }
+
+        UpdateEndNodeParameters();
+    }
+
+
+    private bool AllWeightsAreValid()
+    {
+        var levels = dataModel.Parameters.GroupBy(p => p.Level).OrderBy(g => g.Key).Skip(1).ToList();
+
+        foreach (var level in levels)
+        {
+            var levelSum = level.Sum(p => p.Weight);
+
+            if (levelSum != 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+
+        UpdateEndNodeParameters();
+    }
+
+    private string ExportParametersModel()
+    {
+        var exportDataModel = new DataModel
+            {
+                Parameters = dataModel.Parameters.Where(p => p.Id != "0").ToList(),
+                EndNodeParameters = dataModel.EndNodeParameters,
+                Alternatives = dataModel.Alternatives
+            };
+
+        var serializer = new XmlSerializer(typeof(DataModel));
+        using (var writer = new StringWriter())
+        {
+            serializer.Serialize(writer, exportDataModel);
+            return writer.ToString();
+        }
+    }
+
+
+    private void ImportParametersModel(string xml)
+    {
+        var serializer = new XmlSerializer(typeof(DataModel));
+        using (var reader = new StringReader(xml))
+        {
+            var importedDataModel = (DataModel)serializer.Deserialize(reader);
+
+            // Replace the existing dataModel with the imported one
+            dataModel.Parameters = importedDataModel.Parameters;
+            dataModel.EndNodeParameters = importedDataModel.EndNodeParameters;
+            dataModel.Alternatives = importedDataModel.Alternatives;
+        }
+    }
+
+    private async Task HandleImportFile(InputFileChangeEventArgs e)
+    {
+        var stream = e.File.OpenReadStream();
+        using (var reader = new StreamReader(stream))
+        {
+            var xml = await reader.ReadToEndAsync();
+            ImportParametersModel(xml);
+        }
+    }
+
+
+}
+
+<style>
+    .e-btn {
+        font-size: 0.75rem;
+        padding: 0.05rem 0.3rem;
+        border-radius: 5px;
+        margin-left: 5px;
+    }
+
+    .e-outline {
+        background-color: white;
+        color: #007bff;
+        border: none;
+    }
+
+    .e-danger {
+        background-color: white;
+        color: #dc3545;
+        border: none;
+    }
+
+    .e-primary {
+        background-color: white;
+        color: #007bff;
+        border: none;
+    }
+
+    /* ----------- Input Weight ----------- */
+    .weight-input {
+        max-width: 60px;
+    }
+
+    .weight-unit {
+        height: 31px;
+        font-size: 12px;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    /* Utility Function */
+    .form-select-truncate {
+        max-width: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .utility-unit {
+        height: 31px;
+        font-size: 12px;
+        font-weight: bold;
+        text-align: center;
+    }
+</style>

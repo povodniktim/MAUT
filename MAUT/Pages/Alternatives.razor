@@ -1,0 +1,329 @@
+﻿@page "/alternatives"
+@using MAUT.Data
+@using Syncfusion.Blazor.Charts
+@using Syncfusion.Blazor.Charts
+@inject DataModel dataModel
+
+<h3>Alternatives</h3>
+
+@if (dataModel.EndNodeParameters.Any())
+{
+    <div class="col-lg-12 control-section">
+        <div class="content-wrapper">
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="input-group mb-3" style="max-width: 30rem;">
+                        <input type="text" class="form-control" placeholder="New Alternative Name" @bind-value="@newAlternativeName">
+                        <div class="input-group-append">
+                            <button class="btn btn-primary" type="button" @onclick="AddAlternative"> 
+                                <span class="bi bi-plus-lg"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-12 mt-3">
+                    <div class="table-wrapper">
+                        <table class="table table-striped table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    @foreach (var alt in dataModel.Alternatives)
+                                    {
+                                        <th class="text-center @(alt.IsHighestGrade ? "highest-grade" : "")">@alt.Name</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var param in dataModel.EndNodeParameters)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <span class="m-2">@param.Name</span>
+                                            </div>
+                                        </td>
+                                        @foreach (var alt in dataModel.Alternatives)
+                                        {
+                                            alt.InitializeAltParameters(dataModel.EndNodeParameters);
+                                            foreach (var altParam in alt.AltEndNodeParameters)
+                                            {
+                                                // Use the parameter with matching ID
+                                                if (altParam.Id.EndsWith(param.Id)) 
+                                                {
+                                                    <td class="@(alt.IsHighestGrade ? "highest-grade" : "")">
+                                                        <div style="display: flex; margin-bottom: 5px">
+                                                            <div class="input-group" style="margin-left: 10px; min-width: 8rem;">
+                                                                <input  type="number" class="form-control form-control-truncate" min="0" @bind="@altParam.ActualValue">
+                                                                <span class="input-group-text weight-unit" style="border-color: dodgerblue; color: white; background-color: dodgerblue;">V</span>
+                                                            </div>
+                                                            <div class="input-group" style="margin-left: 10px; min-width: 8rem;">
+                                                                <input type="number" min="0" max="1" step="0.1" disabled class="form-control" readonly @bind-value="@altParam.Usefulness">
+                                                                <span class="input-group-text weight-unit" style="border-color: limegreen; color: white; background-color: limegreen;">U</span>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                }
+                                            }
+                                        }
+                                    </tr>
+                                }
+                                @if (showTotalGradeRow)
+                                {
+                                    <tr class="totalGrade-row">
+                                        <td class="m-2">Grade</td>
+                                        @foreach (var alt in dataModel.Alternatives)
+                                        {
+                                            <td class="text-center m-2 @(alt.IsHighestGrade ? "highest-grade" : "")">@alt.TotalGrade</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary mautBtn" @onclick="@(() => { CalculateMAUT(); showTotalGradeRow = true; })">Calculate MAUT</button>
+
+                <div class="col-md-12 mt-3">
+                    <div class="chart-container">
+                        <SfChart>
+                            <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category" Title="Alternative">
+                                <ChartAxisLabelStyle Color="#34495E" FontWeight="bold"></ChartAxisLabelStyle>
+                            </ChartPrimaryXAxis>
+                            <ChartPrimaryYAxis Title="Result">
+                                <ChartAxisLabelStyle Color="#FF5733" FontWeight="bold"></ChartAxisLabelStyle>
+                            </ChartPrimaryYAxis>
+                            <ChartSeriesCollection>
+                                <ChartSeries Type="ChartSeriesType.Column" DataSource="@dataModel.Parameters.Select(result => new { Alternative = result.Name, Result = result.Weight })" XName="Alternative" YName="Result" Fill="#3498DB">
+                                    <ChartMarker>
+                                        <ChartDataLabel Visible="true"></ChartDataLabel>
+                                    </ChartMarker>
+                                </ChartSeries>
+                            </ChartSeriesCollection>
+                        </SfChart>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <p>There are no end node parameters.</p>
+}
+
+@code 
+{
+    private string newAlternativeName;
+    private bool showTotalGradeRow = false;
+
+    private void AddAlternative()
+    {
+        if(string.IsNullOrWhiteSpace(newAlternativeName))
+        {
+            return;
+        }
+
+        dataModel.Alternatives.Add(new AlternativeModel { Id = Guid.NewGuid().ToString(), Name = newAlternativeName });
+        newAlternativeName = "";
+    }
+
+    public void CalculateUsefulnessForEndNodeParameters()
+    {
+        foreach (var param in dataModel.EndNodeParameters)
+        {
+            double minActualValue = dataModel.Alternatives.Min(alt =>
+            {
+                var altEndNodeParam = alt.AltEndNodeParameters.FirstOrDefault(p => p.Name == param.Name);
+                return altEndNodeParam?.ActualValue ?? 0;
+            });
+
+            double maxActualValue = dataModel.Alternatives.Max(alt =>
+            {
+                var altEndNodeParam = alt.AltEndNodeParameters.FirstOrDefault(p => p.Name == param.Name);
+                return altEndNodeParam?.ActualValue ?? 0;
+            });
+
+            foreach (var alt in dataModel.Alternatives)
+            {
+                var altEndNodeParam = alt.AltEndNodeParameters.FirstOrDefault(p => p.Name == param.Name);
+                if (altEndNodeParam != null)
+                {
+                    altEndNodeParam.Usefulness = Math.Min(CalculateUsefulnessByUtilityFunction(altEndNodeParam.ActualValue, minActualValue, maxActualValue, param.UtilityFunction), 1);
+                }
+            }
+        }
+    }
+
+    private double CalculateUsefulnessByUtilityFunction(double actualValue, double minValue, double maxValue, string utilityFunction)
+    {
+        double usefulness = 0;
+
+        if (utilityFunction.Equals("linear", StringComparison.OrdinalIgnoreCase))
+        {
+            usefulness = CalculateLinearUsefulness(actualValue, minValue, maxValue);
+        }
+        else if (utilityFunction.Equals("exponent", StringComparison.OrdinalIgnoreCase))
+        {
+            usefulness = CalculateExponentialUsefulness(actualValue, maxValue);
+        }
+        else if (utilityFunction.Equals("logarithmic", StringComparison.OrdinalIgnoreCase))
+        {
+            usefulness = CalculateLogarithmicUsefulness(actualValue);
+        }
+        else
+        {
+            return 0;
+        }
+
+        return Math.Round(usefulness, 2);
+    }
+
+    private double CalculateLinearUsefulness(double actualValue, double minValue, double maxValue)
+    {
+        return (actualValue - minValue) / (maxValue - minValue);
+    }
+
+    private double CalculateExponentialUsefulness(double actualValue, double maxValue)
+    {
+        double k = 1 / Math.Pow(maxValue, 2);
+        double usefulness = k * Math.Pow(actualValue, 2);
+
+        return usefulness;
+    }
+
+    private double CalculateLogarithmicUsefulness(double actualValue)
+    {
+        double usefulness = Math.Log(actualValue + 1, 10);
+
+        return usefulness;
+    }
+
+    public void CalculateUsefulnessForParentParameters()
+    {
+        var parentParameters = dataModel.Parameters.Where(p => p.HasSubParameters == true && p.Id != "0");
+
+        for (int maxLevel = dataModel.Parameters.Max(p => p.Level); maxLevel >= 1; maxLevel--)
+        {
+            var parentParametersAtLevel = parentParameters.Where(p => p.Level == maxLevel);
+
+            foreach (var parent in parentParametersAtLevel)
+            {
+                CalculateParentParameterUsefulness(parent);
+            }
+        }
+    }
+
+    private void CalculateParentParameterUsefulness(ParameterModel parent)
+    {
+        var children = dataModel.Parameters.Where(p => p.ParentId == parent.Id);
+
+        foreach (var alternative in dataModel.Alternatives)
+        {
+            double sumOfValues = 0;
+
+            foreach (var child in children)
+            {
+                var altParam = alternative.AltEndNodeParameters.FirstOrDefault(p => p.Id == $"{alternative.Id}-{child.Id}");
+                if (altParam != null)
+                {
+                    sumOfValues += altParam.Usefulness * altParam.Weight;
+                }
+            }
+
+            alternative.AltParentParameters.Add(new ParameterModel
+                {
+                    Id = $"{alternative.Id}-{parent.Id}",
+                    ParentId = parent.ParentId,
+                    Name = parent.Name,
+                    Usefulness = sumOfValues,
+                    HasSubParameters = parent.HasSubParameters,
+                    Weight = parent.Weight,
+                    UtilityFunction = parent.UtilityFunction
+                });
+        }
+    }
+
+    public void CalculateMAUT()
+    {
+        CalculateUsefulnessForEndNodeParameters();
+        CalculateUsefulnessForParentParameters();
+
+        foreach (var alt in dataModel.Alternatives)
+        {
+            var allRootNodeChildren = dataModel.Parameters.Where(p => p.ParentId == "0");
+
+            double alternativeTotalGrade = 0;
+
+            foreach (var child in allRootNodeChildren)
+            {
+                var altParam = alt.AltParentParameters.FirstOrDefault(p => p.Id == $"{alt.Id}-{child.Id}");
+
+                if(altParam == null)
+                {
+                    altParam = alt.AltEndNodeParameters.FirstOrDefault(p => p.Id == $"{alt.Id}-{child.Id}");
+                }
+
+                if (altParam != null)
+                {
+                    alternativeTotalGrade += altParam.Usefulness * altParam.Weight;
+                }
+            }
+
+            alt.TotalGrade = Math.Round(alternativeTotalGrade, 2);
+        }
+
+        // Find the maximum grade among all alternatives
+        double maxGrade = dataModel.Alternatives.Max(alt => alt.TotalGrade);
+
+        // Set the IsHighestGrade property for each alternative
+        foreach (var alt in dataModel.Alternatives)
+        {
+            alt.IsHighestGrade = alt.TotalGrade == maxGrade;
+        }
+    }
+}
+
+<style>
+    /* Table */
+    .totalGrade-row {
+        background-color: limegreen;
+        color: white;
+    }
+
+    .table-wrapper {
+        max-width: 1300px;
+        overflow-x: auto;
+    }
+
+    table {
+        border-collapse: collapse;
+        border-spacing: 0;
+        width: 100%;
+        border: 1px solid #ddd;
+    }
+
+    th, td {
+        text-align: left;
+        padding: 8px;
+    }
+
+    /* Actual value input */
+    .form-control-truncate {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Highest grade */
+    .highest-grade {
+        background-color: green !important;
+        color: white;
+    }
+
+    /* Button MAUT */
+    .mautBtn {
+        margin-top: 10px;
+    }
+</style>
